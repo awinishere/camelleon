@@ -4,12 +4,15 @@ from loguru import logger
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from serve.features.authentication.common.generate_token_handler import generate_access_token, generate_refresh_token
 from serve.features.authentication.common.generator_code_handler import generate_code
 from serve.features.authentication.common.hashing_handler import hashing
+from serve.features.authentication.common.match_handler import match
 from serve.features.authentication.models.credentials import Credentials
 from serve.features.authentication.models.extensions.type_purpose import TypePurpose
 from serve.features.authentication.models.extensions.type_roles import Roles
 from serve.features.authentication.models.otp import OTP
+from serve.features.authentication.schema.login import LoginRequest
 from serve.features.authentication.schema.verification_email import VerificationEmailRequest
 from serve.shared.common.template_handler import render_template
 from serve.shared.email.send_email_handler import send_email
@@ -23,12 +26,7 @@ async def register( session: AsyncSession, email: str,password: str) -> Credenti
     if existing_credentials is not None:
         raise ValueError("Email already registered")
 
-    credentials = Credentials(
-        email = email,
-        password = hashing(password),
-        role = Roles.User,
-    )
-
+    credentials = Credentials(email = email, password = hashing(password), role = Roles.User)
     session.add(credentials)
 
     await session.commit()
@@ -37,10 +35,7 @@ async def register( session: AsyncSession, email: str,password: str) -> Credenti
     logger.success("Registration successful: credentials_id={}", credentials.id)
     return credentials
 
-async def send_verification_otp(
-        session: AsyncSession,
-        credentials: Credentials,
-) -> None:
+async def send_verification_otp(session: AsyncSession, credentials: Credentials) -> None:
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=15)
 
@@ -54,9 +49,7 @@ async def send_verification_otp(
 
 
     if send_count >= 3:
-        raise ValueError(
-            "Maximum OTP request reached. Please try again later"
-        )
+        raise ValueError("Maximum OTP request reached. Please try again later")
 
     code = generate_code()
 
@@ -79,14 +72,9 @@ async def send_verification_otp(
         html=html
     )
 
-async def verification_otp(
-    session: AsyncSession,
-    request: VerificationEmailRequest,
-) -> Credentials:
+async def verification_otp(session: AsyncSession, request: VerificationEmailRequest) -> Credentials:
     credentials = await session.scalar(
-        select(Credentials).where(
-            Credentials.email == request.email,
-        )
+        select(Credentials).where(Credentials.email == request.email)
     )
 
     if credentials is None:
@@ -114,9 +102,26 @@ async def verification_otp(
     await session.commit()
     await session.refresh(credentials)
 
-    logger.success(
-        "Email verification successful: credentials_id={}",
-        credentials.id,
-    )
+    logger.success("Email verification successful: credentials_id={}", credentials.id)
 
     return credentials
+
+async def login(session: AsyncSession, request: LoginRequest) -> tuple[str, str]:
+    credentials = await session.scalar(
+        select(Credentials).where(Credentials.email == request.email)
+    )
+
+    if credentials is None:
+        raise ValueError("Invalid email or password")
+
+    if not credentials.active:
+        raise ValueError("Email has not been verified")
+
+    if not match(request.password,credentials.password):
+        raise ValueError("Invalid email or password")
+
+    access_token = generate_access_token(credentials_id=credentials.id, role=credentials.role.value)
+    refresh_token = generate_refresh_token(credentials_id=credentials.id)
+
+    logger.success("Login successful: credentials_id={}", credentials.id)
+    return access_token, refresh_token
