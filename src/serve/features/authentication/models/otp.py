@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 from serve.database import Base
-from serve.features.authentication.models.type_purpose import TypePurpose
+from serve.features.authentication.models.extensions.type_purpose import TypePurpose
 
 
 class OTP(Base):
